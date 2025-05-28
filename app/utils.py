@@ -162,11 +162,22 @@ class QdrantService:
         self.index.insert_nodes(docs)
         self.docs = {doc.id_: doc for doc in docs}
 
+    CITATION_REGEX = r"\s+\[(\d+)\]"
+
     def query(self, query_str: str) -> Output:
         assert self.index
         engine = CitationQueryEngine.from_args(self.index, similarity_top_k=self.k)
         result = engine.query(query_str)
         assert isinstance(result, Response)
+
+        response_text = str(result.response)
+        sources = [
+            # Citations are 1-indexed
+            result.source_nodes[int(num) - 1]
+            # Assume CitationQueryEngine always formats citations at the end in formats like "[1]"
+            for num in re.findall(self.CITATION_REGEX, response_text)
+        ]
+        response_text = re.sub(self.CITATION_REGEX, "", response_text)
 
         citations = [
             Citation(
@@ -174,22 +185,6 @@ class QdrantService:
                 # Tie it back to the original document as the source-node comes back restructured
                 text=self.docs[node.id_].text,
             )
-            for node in result.source_nodes
+            for node in sources
         ]
-        return Output(
-            query=query_str, response=str(result.response), citations=citations
-        )
-
-
-if __name__ == "__main__":
-    doc_serivce = DocumentService(
-        filepath="docs/laws.pdf",
-        parse_start=PDFPosition(page_number=0, y_coord=80),
-        parse_end=PDFPosition(page_number=1, y_coord=640),
-    )
-    docs = doc_serivce.create_documents()
-
-    index = QdrantService()
-    index.connect()
-    index.load(docs)
-    index.query("what happens if i steal?")
+        return Output(query=query_str, response=response_text, citations=citations)
