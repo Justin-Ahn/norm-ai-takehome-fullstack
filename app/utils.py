@@ -40,18 +40,23 @@ class PDFPosition:
 
 
 @dataclass
+class PDFParseInfo:
+    filepath: str
+    parse_start: PDFPosition
+    parse_end: PDFPosition
+
+
+@dataclass
 class LawSection:
     section_number: str
     section_title_or_content: str
 
 
 class DocumentService:
-    def __init__(
-        self, filepath: str, parse_start: PDFPosition, parse_end: PDFPosition
-    ) -> None:
-        self.filepath = filepath
-        self.parse_start = parse_start
-        self.parse_end = parse_end
+    def __init__(self, pdf_file_info: PDFParseInfo) -> None:
+        self.filepath = pdf_file_info.filepath
+        self.parse_start = pdf_file_info.parse_start
+        self.parse_end = pdf_file_info.parse_end
 
     # Returns raw-lines of text from a PDF file, within the specified PDF positioning range
     def _extract_textlines_within_range(self, filepath: str) -> list[str]:
