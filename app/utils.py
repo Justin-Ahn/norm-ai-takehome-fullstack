@@ -4,21 +4,21 @@ from llama_index.vector_stores.qdrant import QdrantVectorStore
 from llama_index.embeddings.openai import OpenAIEmbedding
 from llama_index.llms.openai import OpenAI
 from llama_index.core.schema import Document, NodeRelationship, RelatedNodeInfo
-from llama_index.core import (
-    VectorStoreIndex,
-    ServiceContext,
-)
+from llama_index.core.query_engine import CitationQueryEngine
+from llama_index.core.settings import Settings
+from llama_index.core.base.response.schema import Response
+from llama_index.core import VectorStoreIndex
 from dataclasses import dataclass
 import pdfplumber
 import re
+import os
 
-# key = os.environ["OPENAI_API_KEY"]
+key = os.environ["OPENAI_API_KEY"]
 
 
 @dataclass
 class Input:
     query: str
-    file_path: str
 
 
 @dataclass
@@ -46,14 +46,6 @@ class LawSection:
 
 
 class DocumentService:
-    """
-    Update this service to load the pdf and extract its contents.
-    The example code below will help with the data structured required
-    when using the QdrantService.load() method below. Note: for this
-    exercise, ignore the subtle difference between llama-index's
-    Document and Node classes (i.e, treat them as interchangeable).
-    """
-
     def __init__(
         self, filepath: str, parse_start: PDFPosition, parse_end: PDFPosition
     ) -> None:
@@ -148,6 +140,7 @@ class DocumentService:
 class QdrantService:
     def __init__(self, k: int = 2):
         self.index = None
+        self.docs = {}
         self.k = k
 
     def connect(self) -> None:
@@ -155,43 +148,32 @@ class QdrantService:
 
         vstore = QdrantVectorStore(client=client, collection_name="temp")
 
-        service_context = ServiceContext.from_defaults(
-            embed_model=OpenAIEmbedding(), llm=OpenAI(api_key=key, model="gpt-4")
-        )
-
-        self.index = VectorStoreIndex.from_vector_store(
-            vector_store=vstore, service_context=service_context
-        )
+        Settings.llm = OpenAI(api_key=key, model="gpt-3.5-turbo")
+        Settings.embed_model = OpenAIEmbedding()
+        self.index = VectorStoreIndex.from_vector_store(vector_store=vstore)
 
     def load(self, docs: list[Document]):
-        assert self.index is not None
+        assert self.index
         self.index.insert_nodes(docs)
+        self.docs = {doc.id_: doc for doc in docs}
 
     def query(self, query_str: str) -> Output:
-        """
-        This method needs to initialize the query engine, run the query, and return
-        the result as a pydantic Output class. This is what will be returned as
-        JSON via the FastAPI endpount. Fee free to do this however you'd like, but
-        a its worth noting that the llama-index package has a CitationQueryEngine...
+        assert self.index
+        engine = CitationQueryEngine.from_args(self.index, similarity_top_k=self.k)
+        result = engine.query(query_str)
+        assert isinstance(result, Response)
 
-        Also, be sure to make use of self.k (the number of vectors to return based
-        on semantic similarity).
-
-        # Example output object
         citations = [
-            Citation(source="Law 1", text="Theft is punishable by hanging"),
-            Citation(source="Law 2", text="Tax evasion is punishable by banishment."),
-        ]
-
-        output = Output(
-            query=query_str,
-            response=response_text,
-            citations=citations
+            Citation(
+                source=f"Section {node.metadata['Section']}",
+                # Tie it back to the original document as the source-node comes back restructured
+                text=self.docs[node.id_].text,
             )
-
-        return output
-
-        """
+            for node in result.source_nodes
+        ]
+        return Output(
+            query=query_str, response=str(result.response), citations=citations
+        )
 
 
 if __name__ == "__main__":
@@ -205,5 +187,4 @@ if __name__ == "__main__":
     index = QdrantService()
     index.connect()
     index.load(docs)
-
-    index.query("what happens if I steal?")  # NOT implemented
+    index.query("what happens if i steal?")
